@@ -1,0 +1,27 @@
+{
+	"baseFolder": "XHS Notes",
+	"categories": [
+		"美食",
+		"旅行",
+		"娱乐",
+		"知识",
+		"工作",
+		"情感",
+		"个人成长",
+		"优惠",
+		"搞笑",
+		"育儿"
+	],
+	"downloadMedia": true,
+	"ai": {
+		"enabled": false,
+		"provider": "openai", // 可选: openai, anthropic, deepseek
+		"apiKey": "",
+		"model": "gpt-3.5-turbo",
+		"systemPrompt": "你是一个专业的分类助手。请根据小红书笔记的内容、标题和标签，将其分类到最合适的分类中。\n\n可用的分类：\n- 美食：与食物、烹饪、餐厅相关的内容\n- 旅行：旅游攻略、景点推荐、旅行体验\n- 娱乐：影视、音乐、游戏等娱乐内容\n- 知识：科普、学习、教育类内容\n- 工作：职场经验、工作技巧、行业信息\n- 情感：情感故事、恋爱技巧、心理相关\n- 个人成长：自我提升、学习方法、技能培养\n- 优惠：购物优惠、折扣信息、省钱技巧\n- 搞笑：搞笑内容、段子、幽默分享\n- 育儿：育儿经验、亲子教育、儿童成长\n\n请只返回分类名称，不要解释。如果无法确定分类，请返回\"其他\"。"
+	},
+	"output": {
+		"includeMediaInMarkdown": true,
+		"createMediaFolder": true
+	}
+}
