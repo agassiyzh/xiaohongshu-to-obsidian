@@ -4,7 +4,7 @@ import { Config } from "./types";
 
 const DEFAULT_CONFIG: Config = {
 	baseFolder: "XHS Notes",
-	basePath: "", // 默认为空，使用当前目录
+	basePath: "",
 	categories: [
 		"美食",
 		"旅行",
@@ -22,6 +22,21 @@ const DEFAULT_CONFIG: Config = {
 		"育儿",
 	],
 	downloadMedia: true,
+	s3: {
+		enabled: false,
+		provider: "minio",
+		endpoint: "",
+		bucket: "",
+		accessKey: "",
+		secretKey: "",
+		region: "us-east-1",
+		pathPrefix: "xiaohongshu/",
+		uploadStrategy: "both",
+		retry: {
+			maxRetries: 3,
+			timeout: 60000,
+		},
+	},
 	ai: {
 		enabled: false,
 		provider: "openai",

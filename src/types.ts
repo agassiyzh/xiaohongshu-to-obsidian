@@ -1,8 +1,25 @@
+export interface S3Config {
+	enabled: boolean;
+	provider: "aws" | "minio" | "aliyun" | "tencent";
+	endpoint: string;
+	bucket: string;
+	accessKey: string;
+	secretKey: string;
+	region: string;
+	pathPrefix: string;
+	uploadStrategy: "s3-only" | "local-only" | "both";
+	retry: {
+		maxRetries: number;
+		timeout: number;
+	};
+}
+
 export interface Config {
 	baseFolder: string;
-	basePath?: string; // 指定XHS Notes基础目录的完整路径，如果为空则使用当前目录
+	basePath?: string;
 	categories: string[];
 	downloadMedia: boolean;
+	s3: S3Config;
 	ai: {
 		enabled: boolean;
 		provider: "openai" | "anthropic" | "deepseek";
@@ -47,10 +64,26 @@ export interface XHSNote {
 	category?: string;
 }
 
+export interface MediaInfo {
+	type: "image" | "video";
+	url: string;
+	line?: number;
+	originalUrl: string;
+}
+
+export interface ReplaceResult {
+	filePath: string;
+	success: boolean;
+	replaced: number;
+	failed: MediaInfo[];
+	skipped: number[];
+}
+
 export interface ImportResult {
 	filePath: string;
 	category: string;
 	mediaFiles: string[];
+	mediaUrls?: string[];
 	success: boolean;
 	error?: string;
 }

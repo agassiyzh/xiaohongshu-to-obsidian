@@ -5,11 +5,14 @@
 ## 新特性
 
 - 🚀 **独立运行**: 无需安装Obsidian，直接使用命令行
-- 🤖 **AI智能分类**: 支持OpenAI和Anthropic AI进行自动分类
+- 🤖 **AI智能分类**: 支持OpenAI、Anthropic 和 DeepSeek AI 进行自动分类
 - 📁 **智能文件夹管理**: 自动创建分类文件夹并整理笔记
 - 📸 **媒体下载**: 可选择下载图片和视频到本地
+- ☁️ **S3 云存储**: 支持上传媒体到 S3 兼容存储（MinIO、Cloudflare R2、AWS S3 等）
+- 🔄 **媒体替换**: 批量替换 markdown 中的媒体链接为 S3 地址
+- 🧹 **媒体清理**: 自动清理孤立的媒体文件
 - 💻 **命令行界面**: 支持交互模式和批量处理
-- ⚙️ **灵活配置**: 支持自定义分类、AI设置等
+- ⚙️ **灵活配置**: 支持自定义分类、AI、S3 等设置
 
 ## 安装
 
@@ -81,10 +84,25 @@ npx tsx src/cli.ts interactive
   "baseFolder": "XHS Notes",
   "categories": ["美食", "旅行", "娱乐", "知识", "工作", "情感", "个人成长", "优惠", "搞笑", "育儿"],
   "downloadMedia": true,
+  "s3": {
+    "enabled": false,
+    "provider": "minio",
+    "endpoint": "http://localhost:9000",
+    "bucket": "",
+    "accessKey": "",
+    "secretKey": "",
+    "region": "us-east-1",
+    "pathPrefix": "xiaohongshu/",
+    "uploadStrategy": "both",
+    "retry": {
+      "maxRetries": 3,
+      "timeout": 60000
+    }
+  },
   "ai": {
-    "enabled": true,
+    "enabled": false,
     "provider": "openai",
-    "apiKey": "your-api-key",
+    "apiKey": "",
     "model": "gpt-3.5-turbo",
     "systemPrompt": "自定义AI分类提示词..."
   },
@@ -141,19 +159,21 @@ XHS Notes/
 
 ## 命令行选项
 
-### import 命令
+### import 命令 - 导入笔记
 
 ```bash
 xhs-import import [options]
 
 选项:
-  -u, --url <url>           直接指定URL导入
+  -u, --url <url>            直接指定URL导入
   -c, --category <category> 强制指定分类
-  -d, --download-media      下载媒体文件
-  --no-download-media       不下载媒体文件
+  -d, --download-media       下载媒体文件到本地
+  --no-download-media        不下载媒体文件
+  --s3                       导入时上传媒体到 S3
+  --s3-only                  只上传到 S3，不保留本地文件
 ```
 
-### batch 命令（新增）
+### batch 命令 - 批量导入
 
 ```bash
 xhs-import batch [options]
@@ -165,41 +185,125 @@ xhs-import batch [options]
   -d, --download-media       下载媒体文件
   --no-download-media        不下载媒体文件
   --force-reimport           强制重新导入已存在的笔记
-  -p, --parallel <number>    并发导入数量（默认3）
+  -p, --parallel <number>   并发导入数量（默认3）
 ```
 
-### history 命令（新增）
+### replace-media 命令 - 替换媒体链接
 
 ```bash
-xhs-import history [options]
+xhs-import replace-media <directory> [options]
 
 选项:
-  --export <path>  导出历史到CSV文件
-  --clear          清空导入历史
+  -p, --preview              预览模式（查看哪些链接需要替换）
+  --dry-run                  模拟替换（不实际修改）
+  --execute                  执行替换
+  --filter <filter>         过滤条件 (type:image, type:video)
+  --backup                   替换前创建备份
+  --force                    强制重新上传已存在的文件
+  --continue-on-error        遇到错误继续处理
 ```
 
-### config 命令
+### cleanup-media 命令 - 清理孤立媒体
+
+```bash
+xhs-import cleanup-media <directory> [options]
+
+选项:
+  -p, --preview              预览模式（查看将被删除的文件）
+  --dry-run                  模拟删除（不实际删除）
+  --execute                  执行删除
+```
+
+### config 命令 - 配置管理
 
 ```bash
 xhs-import config [options]
 
 选项:
-  --show                    显示当前配置
-  --set-ai-key <key>        设置AI API密钥
-  --set-ai-provider <provider> 设置AI提供商 (openai/anthropic/deepseek)
-  --set-base-folder <folder>   设置基础文件夹
-  --enable-ai              启用AI分类
-  --disable-ai             禁用AI分类
+  --show                     显示当前配置
+  --show-s3                  显示 S3 配置
+  --set-ai-key <key>         设置 AI API 密钥
+  --set-ai-provider <provider> 设置 AI 提供商 (openai/anthropic/deepseek)
+  --set-base-folder <folder> 设置基础文件夹
+  --enable-ai                启用 AI 分类
+  --disable-ai               禁用 AI 分类
+  --enable-s3                启用 S3 上传
+  --disable-s3               禁用 S3 上传
+  --set-s3-endpoint <url>    设置 S3 endpoint
+  --set-s3-bucket <name>     设置 S3 bucket
+  --set-s3-access-key <key> 设置 S3 access key
+  --set-s3-secret-key <key> 设置 S3 secret key
+  --set-s3-provider <provider> 设置 S3 provider (aws/minio/aliyun/tencent)
+  --set-s3-region <region>   设置 S3 region
+  --set-s3-path-prefix <prefix> 设置 S3 路径前缀
+  --set-s3-strategy <strategy> 设置上传策略 (s3-only/local-only/both)
 ```
 
 ### 其他命令
 
 ```bash
 xhs-import categories      # 显示可用分类
+xhs-import history         # 查看导入历史
+xhs-import history --export <file>  # 导出历史到 CSV
 xhs-import interactive     # 启动交互模式
 xhs-import --help          # 显示帮助信息
 xhs-import --version       # 显示版本信息
 ```
+
+## S3 配置指南
+
+### 支持的存储服务
+
+- **MinIO** - 自建 S3 兼容存储
+- **Cloudflare R2** - 无出口流量费用
+- **AWS S3** - Amazon S3
+- **阿里云 OSS** - 阿里云对象存储
+- **腾讯云 COS** - 腾讯云对象存储
+
+### 配置示例
+
+```bash
+# MinIO / RustFS
+xhs-import config --enable-s3 \
+  --set-s3-endpoint http://localhost:9000 \
+  --set-s3-bucket mybucket \
+  --set-s3-access-key mykey \
+  --set-s3-secret-key mysecret \
+  --set-s3-provider minio
+
+# Cloudflare R2
+xhs-import config --enable-s3 \
+  --set-s3-endpoint https://<account-id>.r2.cloudflarestorage.com \
+  --set-s3-bucket mybucket \
+  --set-s3-access-key mykey \
+  --set-s3-secret-key mysecret \
+  --set-s3-provider aws \
+  --set-s3-region auto
+```
+
+### 使用流程
+
+1. **配置 S3**
+   ```bash
+   xhs-import config --enable-s3 --set-s3-endpoint ... --set-s3-bucket ... --set-s3-access-key ... --set-s3-secret-key ...
+   ```
+
+2. **导入时上传**
+   ```bash
+   xhs-import import --url <url> --s3
+   ```
+
+3. **替换现有 markdown 中的链接**
+   ```bash
+   xhs-import replace-media ./XHS\ Notes --preview  # 预览
+   xhs-import replace-media ./XHS\ Notes --execute  # 执行替换
+   ```
+
+4. **清理孤立媒体文件**
+   ```bash
+   xhs-import cleanup-media ./XHS\ Notes --preview  # 预览
+   xhs-import cleanup-media ./XHS\ Notes --execute  # 执行删除
+   ```
 
 ## 开发
 
@@ -253,9 +357,15 @@ MIT License
 
 ## 更新日志
 
+### v2.1.0
+- 新增 S3 云存储支持（MinIO、Cloudflare R2、AWS S3 等）
+- 新增 replace-media 命令：批量替换 markdown 中的媒体链接为 S3 地址
+- 新增 cleanup-media 命令：清理孤立的媒体文件
+- 支持导入时直接上传到 S3
+
 ### v2.0.0
 - 完全重构为独立应用
-- 添加AI智能分类功能
-- 支持OpenAI和Anthropic
+- 添加 AI 智能分类功能
+- 支持 OpenAI、Anthropic 和 DeepSeek
 - 新增命令行界面
 - 改进文件组织结构

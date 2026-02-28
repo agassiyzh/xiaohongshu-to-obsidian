@@ -1,20 +1,29 @@
 import fs from "fs/promises";
 import path from "path";
-import { XHSNote, ImportResult } from "./types";
+import { XHSNote, ImportResult, S3Config } from "./types";
+import { S3Uploader } from "./s3-uploader";
 
 export class FileManager {
 	private baseFolder: string;
-	private basePath: string; // 完整的基础路径
+	private basePath: string;
 	private createMediaFolder: boolean;
+	private s3Config?: S3Config;
+	private s3Uploader?: S3Uploader;
 
 	constructor(
 		baseFolder: string,
 		createMediaFolder: boolean = true,
 		basePath?: string,
+		s3Config?: S3Config,
 	) {
 		this.baseFolder = baseFolder;
-		this.basePath = basePath || process.cwd(); // 如果没有指定basePath，使用当前工作目录
+		this.basePath = basePath || process.cwd();
 		this.createMediaFolder = createMediaFolder;
+		this.s3Config = s3Config;
+		
+		if (s3Config?.enabled) {
+			this.s3Uploader = new S3Uploader(s3Config);
+		}
 	}
 
 	// 获取完整的基础目录路径
@@ -31,9 +40,9 @@ export class FileManager {
 		note: XHSNote,
 		category: string,
 		downloadMedia: boolean = false,
+		uploadToS3: boolean = false,
 	): Promise<ImportResult> {
 		try {
-			// Create folders if they don't exist
 			const fullBasePath = this.getFullBasePath();
 			const categoryFolder = path.join(fullBasePath, category);
 			const mediaFolder = path.join(fullBasePath, "media");
@@ -44,68 +53,85 @@ export class FileManager {
 				await this.ensureDirectory(mediaFolder);
 			}
 
-			// Generate filename
 			const safeTitle = this.sanitizeTitle(note.title);
 			const prefix = note.isVideo ? "[V]" : "";
 			const filename = `${prefix}${safeTitle}.md`;
 			const filePath = path.join(categoryFolder, filename);
 
-			// Generate markdown content
-			const markdown = this.generateMarkdown(
-				note,
-				downloadMedia,
-				mediaFolder,
-			);
-
-			// Download media files if needed
+			const useS3Urls = !!(uploadToS3 && this.s3Uploader);
 			const mediaFiles: string[] = [];
+			const mediaUrls: string[] = [];
+			const s3UrlMap: Record<string, string> = {};
+
 			if (downloadMedia) {
 				if (note.isVideo) {
-					// 视频笔记：下载视频文件 + 下载封面图片（如果有）
-					// 下载视频文件
 					for (let i = 0; i < note.videos.length; i++) {
-						const mediaFile = await this.downloadMediaFile(
+						const filename = `${this.sanitizeTitle(note.title)}-video-${i}.mp4`;
+						const result = await this.downloadMediaFile(
 							note.videos[i],
 							mediaFolder,
-							`${this.sanitizeTitle(note.title)}-video-${i}.mp4`,
+							filename,
+							uploadToS3,
 						);
-						if (mediaFile) {
-							mediaFiles.push(mediaFile);
+						if (result.success) {
+							if (result.localPath) mediaFiles.push(result.localPath);
+							if (result.s3Url) {
+								mediaUrls.push(result.s3Url);
+								s3UrlMap[filename] = result.s3Url;
+							}
 						}
 					}
-					// 下载封面图片（如果有图片）
 					for (let i = 0; i < note.images.length; i++) {
-						const mediaFile = await this.downloadMediaFile(
+						const filename = `${this.sanitizeTitle(note.title)}-${i}.jpg`;
+						const result = await this.downloadMediaFile(
 							note.images[i],
 							mediaFolder,
-							`${this.sanitizeTitle(note.title)}-${i}.jpg`,
+							filename,
+							uploadToS3,
 						);
-						if (mediaFile) {
-							mediaFiles.push(mediaFile);
+						if (result.success) {
+							if (result.localPath) mediaFiles.push(result.localPath);
+							if (result.s3Url) {
+								mediaUrls.push(result.s3Url);
+								s3UrlMap[filename] = result.s3Url;
+							}
 						}
 					}
 				} else {
-					// 图片笔记：下载所有图片文件
 					for (let i = 0; i < note.images.length; i++) {
-						const mediaFile = await this.downloadMediaFile(
+						const filename = `${this.sanitizeTitle(note.title)}-${i}.jpg`;
+						const result = await this.downloadMediaFile(
 							note.images[i],
 							mediaFolder,
-							`${this.sanitizeTitle(note.title)}-${i}.jpg`,
+							filename,
+							uploadToS3,
 						);
-						if (mediaFile) {
-							mediaFiles.push(mediaFile);
+						if (result.success) {
+							if (result.localPath) mediaFiles.push(result.localPath);
+							if (result.s3Url) {
+								mediaUrls.push(result.s3Url);
+								s3UrlMap[filename] = result.s3Url;
+							}
 						}
 					}
 				}
 			}
 
-			// Write markdown file
+			const markdown = this.generateMarkdown(
+				note,
+				downloadMedia,
+				mediaFolder,
+				useS3Urls,
+				s3UrlMap,
+			);
+
 			await fs.writeFile(filePath, markdown, "utf-8");
 
 			return {
 				filePath,
 				category,
 				mediaFiles,
+				mediaUrls,
 				success: true,
 			};
 		} catch (error) {
@@ -140,27 +166,34 @@ export class FileManager {
 		note: XHSNote,
 		downloadMedia: boolean,
 		mediaFolder: string,
+		useS3Urls: boolean = false,
+		s3UrlMap: Record<string, string> = {},
 	): string {
 		const now = new Date();
 		const dateStr = now.toISOString().split("T")[0];
 		const importedAt = now.toLocaleString();
 
-		// Determine cover image URL - ALWAYS use images for cover, never video files
+		const getImageUrl = (index: number, isVideo: boolean = false): string => {
+			const filename = isVideo
+				? `${this.sanitizeTitle(note.title)}-video-${index}.mp4`
+				: `${this.sanitizeTitle(note.title)}-${index}.jpg`;
+			
+			if (useS3Urls && s3UrlMap[filename]) {
+				return s3UrlMap[filename];
+			}
+			return downloadMedia ? `../media/${filename}` : note.images[index];
+		};
+
 		let coverImageUrl = "";
 		if (note.images.length > 0) {
-			// Both video and image notes: use first image as cover if available
 			coverImageUrl = note.images[0];
 			if (downloadMedia) {
-				const imageFilename = `${this.sanitizeTitle(note.title)}-0.jpg`;
-				coverImageUrl = `../media/${imageFilename}`;
+				coverImageUrl = getImageUrl(0);
 			}
 		}
-		// For any notes without images, no cover image will be set
 
-		// Clean tags (remove trailing #)
 		const cleanTags = note.tags.map((tag) => tag.replace(/#$/, ""));
 
-		// Build frontmatter with cover image and tags
 		let frontmatter = `---
 title: ${note.title}
 source: ${note.url}
@@ -181,43 +214,23 @@ type: ${note.isVideo ? "video" : "image"}`;
 
 		let markdown = frontmatter;
 
-		// Add title
 		markdown += `# ${note.title}\n\n`;
 
-		// Handle video notes - add video player after content
-		if (note.isVideo && note.videos.length > 0) {
-			let videoUrl = note.videos[0];
-			if (downloadMedia) {
-				const videoFilename = `${this.sanitizeTitle(note.title)}-video-0.mp4`;
-				videoUrl = `../media/${videoFilename}`;
-			}
-			// Note: video will be added after content, not at the top
-		}
-
-		// Add content (remove tags from content)
 		const cleanContent = note.content.replace(/#\S+/g, "").trim();
 		markdown += `${cleanContent}\n\n`;
 
-		// Handle image notes - show cover image in content
 		if (!note.isVideo && note.images.length > 0) {
-			// Add cover image back to content for image notes
-			let coverImageUrl = note.images[0];
+			let coverUrl = note.images[0];
 			if (downloadMedia) {
-				const imageFilename = `${this.sanitizeTitle(note.title)}-0.jpg`;
-				coverImageUrl = `../media/${imageFilename}`;
+				coverUrl = getImageUrl(0);
 			}
-			markdown += `![${note.title}](${coverImageUrl})\n\n`;
+			markdown += `![${note.title}](${coverUrl})\n\n`;
 
-			// Add remaining images (excluding cover image)
 			if (note.images.length > 1) {
 				const imageMarkdown = note.images
-					.slice(1) // Skip first image (already added as cover)
+					.slice(1)
 					.map((url, index) => {
-						let finalUrl = url;
-						if (downloadMedia) {
-							const imageFilename = `${this.sanitizeTitle(note.title)}-${index + 1}.jpg`;
-							finalUrl = `../media/${imageFilename}`;
-						}
+						const finalUrl = downloadMedia ? getImageUrl(index + 1) : url;
 						return `![Image ${index + 1}](${finalUrl})`;
 					})
 					.join("\n");
@@ -228,17 +241,18 @@ type: ${note.isVideo ? "video" : "image"}`;
 			}
 		}
 
-		// Handle video notes - add video player after content
 		if (note.isVideo && note.videos.length > 0) {
+			const videoFilename = `${this.sanitizeTitle(note.title)}-video-0.mp4`;
 			let videoUrl = note.videos[0];
 			if (downloadMedia) {
-				const videoFilename = `${this.sanitizeTitle(note.title)}-video-0.mp4`;
-				videoUrl = `../media/${videoFilename}`;
+				if (useS3Urls && s3UrlMap[videoFilename]) {
+					videoUrl = s3UrlMap[videoFilename];
+				} else {
+					videoUrl = `../media/${videoFilename}`;
+				}
 			}
 			markdown += `<video controls src="${videoUrl}" width="100%"></video>\n\n`;
 		}
-
-		// Tags are now only displayed in frontmatter
 
 		return markdown;
 	}
@@ -247,7 +261,8 @@ type: ${note.isVideo ? "video" : "image"}`;
 		url: string,
 		folder: string,
 		filename: string,
-	): Promise<string | null> {
+		uploadToS3: boolean = false,
+	): Promise<{ success: boolean; localPath?: string; s3Url?: string; error?: string }> {
 		try {
 			const fetch = (await import("node-fetch")).default;
 			const response = await fetch(url);
@@ -257,13 +272,30 @@ type: ${note.isVideo ? "video" : "image"}`;
 			}
 
 			const buffer = await response.buffer();
-			const filePath = path.join(folder, filename);
-			await fs.writeFile(filePath, buffer);
+			const localPath = path.join(folder, filename);
+			await fs.writeFile(localPath, buffer);
 
-			return filename;
+			let s3Url: string | undefined;
+			if (uploadToS3 && this.s3Uploader) {
+				const ext = filename.split(".").pop() || "jpg";
+				const contentType = ext === "mp4" ? "video/mp4" : `image/${ext === "jpg" ? "jpeg" : ext}`;
+				const result = await this.s3Uploader.uploadBuffer(buffer, filename, contentType);
+				if (result.success && result.url) {
+					s3Url = result.url;
+				}
+			}
+
+			return {
+				success: true,
+				localPath: localPath,
+				s3Url,
+			};
 		} catch (error) {
 			console.error(`Failed to download media from ${url}:`, error);
-			return null;
+			return {
+				success: false,
+				error: (error as Error).message,
+			};
 		}
 	}
 

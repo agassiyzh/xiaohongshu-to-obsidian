@@ -3,13 +3,15 @@ import { AIClassifier } from "./ai-classifier";
 import { FileManager } from "./file-manager";
 import { ConfigManager } from "./config";
 import { BatchImporter } from "./batch-importer";
-import { XHSNote, ImportResult } from "./types";
+import { S3Uploader } from "./s3-uploader";
+import { XHSNote, ImportResult, Config } from "./types";
 
 export class XHSStandaloneImporter {
 	private xhsImporter: XHSImporter;
 	private configManager: ConfigManager;
 	private fileManager!: FileManager;
 	private aiClassifier?: AIClassifier;
+	private s3Uploader?: S3Uploader;
 
 	constructor(configDir?: string) {
 		this.xhsImporter = new XHSImporter();
@@ -21,13 +23,18 @@ export class XHSStandaloneImporter {
 		this.fileManager = new FileManager(
 			config.baseFolder,
 			config.output.createMediaFolder,
+			undefined,
+			config.s3.enabled ? config.s3 : undefined,
 		);
+
+		if (config.s3.enabled && config.s3.endpoint && config.s3.bucket) {
+			this.s3Uploader = new S3Uploader(config.s3);
+		}
 
 		if (config.ai.enabled && config.ai.apiKey) {
 			this.aiClassifier = new AIClassifier(config.ai);
 		}
 
-		// Create base folder structure
 		await this.fileManager.createFolderStructure(config.baseFolder);
 	}
 
@@ -36,20 +43,18 @@ export class XHSStandaloneImporter {
 		options: {
 			downloadMedia?: boolean;
 			forceCategory?: string;
+			uploadToS3?: boolean;
 		} = {},
 	): Promise<ImportResult> {
 		const config = await this.configManager.loadConfig();
 
-		// Extract URL from share text
 		const url = this.xhsImporter.extractURL(shareText);
 		if (!url) {
 			throw new Error("No valid Xiaohongshu URL found in the text");
 		}
 
-		// Import note data
 		const note = await this.xhsImporter.importXHSNote(url);
 
-		// Determine category
 		let category = options.forceCategory;
 		if (!category) {
 			if (this.aiClassifier && config.ai.enabled) {
@@ -59,7 +64,6 @@ export class XHSStandaloneImporter {
 					config.categories,
 				);
 			} else {
-				// Fallback to keyword-based categorization
 				category = AIClassifier.keywordBasedCategorize(
 					note,
 					config.categories,
@@ -67,12 +71,12 @@ export class XHSStandaloneImporter {
 			}
 		}
 
-		// Set the determined category
 		note.category = category;
 
-		// Create markdown file
 		const downloadMedia = options.downloadMedia ?? config.downloadMedia;
-		return await this.fileManager.createNote(note, category, downloadMedia);
+		const uploadToS3 = options.uploadToS3 ?? (config.s3.enabled && config.s3.uploadStrategy !== "local-only");
+		
+		return await this.fileManager.createNote(note, category, downloadMedia, uploadToS3);
 	}
 
 	async importFromUrl(
@@ -80,14 +84,13 @@ export class XHSStandaloneImporter {
 		options: {
 			downloadMedia?: boolean;
 			forceCategory?: string;
+			uploadToS3?: boolean;
 		} = {},
 	): Promise<ImportResult> {
-		// Import note data
 		const note = await this.xhsImporter.importXHSNote(url);
 
 		const config = await this.configManager.loadConfig();
 
-		// Determine category
 		let category = options.forceCategory;
 		if (!category) {
 			if (this.aiClassifier && config.ai.enabled) {
@@ -97,7 +100,6 @@ export class XHSStandaloneImporter {
 					config.categories,
 				);
 			} else {
-				// Fallback to keyword-based categorization
 				category = AIClassifier.keywordBasedCategorize(
 					note,
 					config.categories,
@@ -105,12 +107,12 @@ export class XHSStandaloneImporter {
 			}
 		}
 
-		// Set the determined category
 		note.category = category;
 
-		// Create markdown file
 		const downloadMedia = options.downloadMedia ?? config.downloadMedia;
-		return await this.fileManager.createNote(note, category, downloadMedia);
+		const uploadToS3 = options.uploadToS3 ?? (config.s3.enabled && config.s3.uploadStrategy !== "local-only");
+		
+		return await this.fileManager.createNote(note, category, downloadMedia, uploadToS3);
 	}
 
 	async updateConfig(updates: any): Promise<void> {
@@ -136,9 +138,34 @@ export class XHSStandaloneImporter {
 		const config = await this.configManager.loadConfig();
 		return [...config.categories, "其他"];
 	}
+
+	// Get S3Uploader instance
+	getS3Uploader(): S3Uploader | undefined {
+		return this.s3Uploader;
+	}
+
+	// Get S3 config
+	async getS3Config() {
+		const config = await this.configManager.loadConfig();
+		return config.s3;
+	}
+
+	// Update S3 config
+	async updateS3Config(updates: Partial<Config["s3"]>): Promise<void> {
+		const config = await this.configManager.loadConfig();
+		const newS3Config = { ...config.s3, ...updates };
+		await this.configManager.updateConfig({ s3: newS3Config });
+		
+		if (newS3Config.enabled && newS3Config.endpoint && newS3Config.bucket) {
+			this.s3Uploader = new S3Uploader(newS3Config);
+		} else {
+			this.s3Uploader = undefined;
+		}
+	}
 }
 
 // Export BatchImporter for external use
 export { BatchImporter } from "./batch-importer";
 export { ImportHistory } from "./import-history";
 export { AntiBotProtection } from "./anti-bot";
+export { S3Uploader } from "./s3-uploader";

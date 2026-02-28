@@ -6,8 +6,10 @@ import chalk from "chalk";
 import ora from "ora";
 import { XHSStandaloneImporter } from "./index";
 import { BatchImporter } from "./batch-importer";
-import { Config } from "./types";
+import { MediaReplacer } from "./media-replacer";
+import { Config, S3Config } from "./types";
 import path from "path";
+import fs from "fs/promises";
 
 const program = new Command();
 
@@ -26,10 +28,20 @@ program
 	.option("-c, --category <category>", "Force specific category")
 	.option("-d, --download-media", "Download media files locally")
 	.option("--no-download-media", "Do not download media files")
+	.option("--s3", "Upload media to S3 during import")
+	.option("--s3-only", "Only upload to S3, no local storage")
 	.action(async (options) => {
 		try {
 			const importer = new XHSStandaloneImporter();
 			await importer.initialize();
+
+			const s3Config = await importer.getS3Config();
+			
+			if ((options.s3 || options.s3Only) && !s3Config.enabled) {
+				console.error(chalk.red("❌ S3 未启用，请先配置 S3"));
+				console.log(chalk.cyan("运行: xhs-import config --enable-s3"));
+				process.exit(1);
+			}
 
 			let shareText: string;
 
@@ -55,9 +67,12 @@ program
 			const spinner = ora("正在导入笔记...").start();
 
 			try {
+				const uploadToS3 = options.s3 || options.s3Only;
+				
 				const result = await importer.importFromShareText(shareText, {
 					downloadMedia: options.downloadMedia,
 					forceCategory: options.category,
+					uploadToS3,
 				});
 
 				spinner.stop();
@@ -70,6 +85,13 @@ program
 						console.log(
 							chalk.yellow(
 								`📸 媒体文件: ${result.mediaFiles.length} 个`,
+							),
+						);
+					}
+					if (result.mediaUrls && result.mediaUrls.length > 0) {
+						console.log(
+							chalk.cyan(
+								`☁️ S3 URL: ${result.mediaUrls.length} 个`,
 							),
 						);
 					}
@@ -91,6 +113,7 @@ program
 	.command("config")
 	.description("Configure the importer")
 	.option("--show", "Show current configuration")
+	.option("--show-s3", "Show S3 configuration")
 	.option("--set-ai-key <key>", "Set AI API key")
 	.option(
 		"--set-ai-provider <provider>",
@@ -99,6 +122,16 @@ program
 	.option("--set-base-folder <folder>", "Set base folder for imports")
 	.option("--enable-ai", "Enable AI categorization")
 	.option("--disable-ai", "Disable AI categorization")
+	.option("--enable-s3", "Enable S3 upload")
+	.option("--disable-s3", "Disable S3 upload")
+	.option("--set-s3-endpoint <url>", "Set S3 endpoint")
+	.option("--set-s3-bucket <name>", "Set S3 bucket")
+	.option("--set-s3-access-key <key>", "Set S3 access key")
+	.option("--set-s3-secret-key <key>", "Set S3 secret key")
+	.option("--set-s3-provider <provider>", "Set S3 provider (aws/minio/aliyun/tencent)")
+	.option("--set-s3-region <region>", "Set S3 region")
+	.option("--set-s3-path-prefix <prefix>", "Set S3 path prefix")
+	.option("--set-s3-strategy <strategy>", "Set upload strategy (s3-only/local-only/both)")
 	.action(async (options) => {
 		try {
 			const importer = new XHSStandaloneImporter();
@@ -155,6 +188,61 @@ program
 					...currentConfig.ai,
 					enabled: false,
 				};
+			}
+
+			if (options.showS3) {
+				const s3Config = await importer.getS3Config();
+				console.log(chalk.blue("S3 配置:"));
+				console.log(JSON.stringify(s3Config, null, 2));
+				return;
+			}
+
+			const s3Updates: Partial<S3Config> = {};
+			
+			if (options.enableS3) {
+				s3Updates.enabled = true;
+			}
+			
+			if (options.disableS3) {
+				s3Updates.enabled = false;
+			}
+			
+			if (options.setS3Endpoint) {
+				s3Updates.endpoint = options.setS3Endpoint;
+			}
+			
+			if (options.setS3Bucket) {
+				s3Updates.bucket = options.setS3Bucket;
+			}
+			
+			if (options.setS3AccessKey) {
+				s3Updates.accessKey = options.setS3AccessKey;
+			}
+			
+			if (options.setS3SecretKey) {
+				s3Updates.secretKey = options.setS3SecretKey;
+			}
+			
+			if (options.setS3Provider) {
+				s3Updates.provider = options.setS3Provider as S3Config["provider"];
+			}
+			
+			if (options.setS3Region) {
+				s3Updates.region = options.setS3Region;
+			}
+			
+			if (options.setS3PathPrefix) {
+				s3Updates.pathPrefix = options.setS3PathPrefix;
+			}
+			
+			if (options.setS3Strategy) {
+				s3Updates.uploadStrategy = options.setS3Strategy as S3Config["uploadStrategy"];
+			}
+
+			if (Object.keys(s3Updates).length > 0) {
+				await importer.updateS3Config(s3Updates);
+				console.log(chalk.green("✅ S3 配置已更新"));
+				return;
 			}
 
 			if (Object.keys(updates).length > 0) {
@@ -556,6 +644,257 @@ program
 				chalk.red("❌ 历史记录错误:"),
 				(error as Error).message,
 			);
+			process.exit(1);
+		}
+	});
+
+// Replace-media command
+program
+	.command("replace-media")
+	.description("Replace media URLs in markdown files with S3 URLs")
+	.argument("<directory>", "Directory containing markdown files")
+	.option("-p, --preview", "Preview only, don't modify files")
+	.option("--dry-run", "Simulate replacement without making changes")
+	.option("--execute", "Execute the replacement (default is preview)")
+	.option("--format <format>", "Output format: text, json", "text")
+	.option("--filter <filter>", "Filter: type:image, type:video")
+	.option("--backup", "Create backup before modifying")
+	.option("--force", "Force re-upload even if already in S3")
+	.option("--continue-on-error", "Continue on error")
+	.action(async (directory, options) => {
+		try {
+			const importer = new XHSStandaloneImporter();
+			await importer.initialize();
+
+			const s3Config = await importer.getS3Config();
+
+			if (!s3Config.enabled) {
+				console.error(chalk.red("❌ S3 未启用，请先配置 S3"));
+				console.log(chalk.cyan("运行: xhs-import config --enable-s3"));
+				process.exit(1);
+			}
+
+			if (!s3Config.endpoint || !s3Config.bucket) {
+				console.error(chalk.red("❌ S3 配置不完整，请先配置 endpoint 和 bucket"));
+				process.exit(1);
+			}
+
+			const config = await importer.getConfig();
+			const replacer = new MediaReplacer(s3Config, config);
+
+			const isPreview = options.preview || (!options.dryRun && !options.execute);
+			const isDryRun = options.dryRun;
+			const isExecute = options.execute;
+
+			if (isPreview) {
+				console.log(chalk.blue(`[预览模式] 扫描目录: ${directory}`));
+				
+				const previewResult = await replacer.preview(directory, options.filter);
+
+				if (previewResult.totalFiles === 0) {
+					console.log(chalk.green("✅ 没有找到需要替换的链接"));
+					return;
+				}
+
+				console.log(chalk.yellow(`\n找到 ${previewResult.totalUrls} 个非S3链接:\n`));
+
+				for (const file of previewResult.files) {
+					console.log(chalk.blue(`📄 ${path.basename(file.filePath)} (${file.category})`));
+					for (const url of file.urls) {
+						const icon = url.type === "image" ? "🖼️" : "🎬";
+						console.log(`   ${icon} ${url.url}`);
+					}
+					console.log();
+				}
+
+				console.log(chalk.cyan("─".repeat(50)));
+				console.log(`总计: ${previewResult.totalFiles} 个文件, ${previewResult.totalUrls} 个链接需要替换`);
+				console.log();
+				console.log(chalk.cyan("使用 --dry-run 模拟替换"));
+				console.log(chalk.cyan("使用 --execute 正式执行替换"));
+			} else if (isDryRun) {
+				console.log(chalk.blue(`[模拟替换] 目录: ${directory}`));
+				const result = await replacer.execute(directory, {
+					backup: options.backup,
+					force: options.force,
+					continueOnError: options.continueOnError,
+					filter: options.filter,
+				});
+
+				console.log(chalk.green(`\n✅ 模拟完成`));
+				console.log(`   将替换: ${result.results.reduce((sum, r) => sum + r.replaced, 0)} 个链接`);
+				console.log(`   将失败: ${result.results.reduce((sum, r) => sum + r.failed.length, 0)} 个链接`);
+			} else if (isExecute) {
+				const { confirm } = await inquirer.prompt([
+					{
+						type: "confirm",
+						name: "confirm",
+						message: "确认执行替换？此操作会修改文件",
+						default: false,
+					},
+				]);
+
+				if (!confirm) {
+					console.log(chalk.yellow("已取消"));
+					return;
+				}
+
+				console.log(chalk.blue(`[执行替换] 目录: ${directory}`));
+				
+				const result = await replacer.execute(directory, {
+					backup: options.backup,
+					force: options.force,
+					continueOnError: options.continueOnError,
+					filter: options.filter,
+				});
+
+				console.log(chalk.green(`\n✅ 替换完成`));
+				console.log(`   成功: ${result.success} 个文件`);
+				console.log(`   失败: ${result.failed} 个文件`);
+				console.log(`   跳过: ${result.skipped} 个链接`);
+				console.log(`   总替换: ${result.results.reduce((sum, r) => sum + r.replaced, 0)} 个链接`);
+
+				if (options.backup) {
+					console.log(chalk.cyan(`   备份目录: ${directory}/.backup`));
+				}
+			}
+		} catch (error) {
+			console.error(chalk.red("❌ 错误:"), (error as Error).message);
+			process.exit(1);
+		}
+	});
+
+// Cleanup-media command
+async function findMarkdownFiles(dir: string): Promise<string[]> {
+	const files: string[] = [];
+	const entries = await fs.readdir(dir, { withFileTypes: true });
+	
+	for (const entry of entries) {
+		const fullPath = path.join(dir, entry.name);
+		if (entry.isDirectory() && entry.name !== "media" && !entry.name.startsWith(".")) {
+			files.push(...await findMarkdownFiles(fullPath));
+		} else if (entry.isFile() && entry.name.endsWith(".md")) {
+			files.push(fullPath);
+		}
+	}
+	
+	return files;
+}
+
+function extractMediaUrlsFromContent(content: string): string[] {
+	const urls: string[] = [];
+	
+	const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+	let match;
+	while ((match = imageRegex.exec(content)) !== null) {
+		urls.push(match[2]);
+	}
+	
+	const videoRegex = /<video[^>]+src=["']([^"']+)["'][^>]*>/gi;
+	while ((match = videoRegex.exec(content)) !== null) {
+		urls.push(match[1]);
+	}
+	
+	const coverRegex = /^cover:\s*(.+)$/m;
+	while ((match = coverRegex.exec(content)) !== null) {
+		urls.push(match[1].trim());
+	}
+	
+	return urls;
+}
+
+program
+	.command("cleanup-media")
+	.description("Clean up orphaned media files")
+	.argument("<directory>", "Directory containing markdown and media files")
+	.option("-p, --preview", "Preview files to be deleted")
+	.option("--execute", "Execute the cleanup")
+	.option("--dry-run", "Simulate cleanup without making changes")
+	.action(async (directory, options) => {
+		try {
+			const importer = new XHSStandaloneImporter();
+			await importer.initialize();
+			const config = await importer.getConfig();
+
+			const fullPath = path.resolve(directory);
+			const mediaPath = path.join(fullPath, "media");
+
+			const isPreview = options.preview || (!options.execute);
+			const isDryRun = options.dryRun;
+			const isExecute = options.execute;
+
+			const markdownFiles = await findMarkdownFiles(fullPath);
+			const referencedMedia = new Set<string>();
+			
+			for (const mdFile of markdownFiles) {
+				const content = await fs.readFile(mdFile, "utf-8");
+				const urls = extractMediaUrlsFromContent(content);
+				
+				for (const url of urls) {
+					const filename = path.basename(url);
+					referencedMedia.add(filename);
+				}
+			}
+
+			let mediaFiles: string[] = [];
+			try {
+				const entries = await fs.readdir(mediaPath, { withFileTypes: true });
+				mediaFiles = entries
+					.filter(e => e.isFile())
+					.map(e => e.name);
+			} catch (error) {
+				console.log(chalk.yellow("⚠️ 没有找到 media 目录"));
+				mediaFiles = [];
+			}
+
+			const orphanedFiles = mediaFiles.filter(f => !referencedMedia.has(f));
+
+			if (isPreview || isDryRun) {
+				console.log(chalk.blue(`[预览模式] 目录: ${fullPath}`));
+				console.log();
+				console.log(`📊 统计信息:`);
+				console.log(`   Markdown 文件: ${markdownFiles.length}`);
+				console.log(`   媒体文件总数: ${mediaFiles.length}`);
+				console.log(`   引用的媒体: ${referencedMedia.size}`);
+				console.log(`   孤立媒体: ${orphanedFiles.length}`);
+				console.log();
+
+				if (orphanedFiles.length > 0) {
+					console.log(chalk.yellow(`🗑️ 孤立文件 (将被删除):`));
+					for (const file of orphanedFiles) {
+						console.log(`   - ${file}`);
+					}
+					console.log();
+					console.log(chalk.cyan("使用 --execute 执行删除"));
+				} else {
+					console.log(chalk.green("✅ 没有孤立的媒体文件"));
+				}
+			} else if (isExecute) {
+				const { confirm } = await inquirer.prompt([
+					{
+						type: "confirm",
+						name: "confirm",
+						message: `确认删除 ${orphanedFiles.length} 个孤立媒体文件？`,
+						default: false,
+					},
+				]);
+
+				if (!confirm) {
+					console.log(chalk.yellow("已取消"));
+					return;
+				}
+
+				let deleted = 0;
+				for (const file of orphanedFiles) {
+					const filePath = path.join(mediaPath, file);
+					await fs.unlink(filePath);
+					deleted++;
+				}
+
+				console.log(chalk.green(`\n✅ 已删除 ${deleted} 个孤立媒体文件`));
+			}
+		} catch (error) {
+			console.error(chalk.red("❌ 错误:"), (error as Error).message);
 			process.exit(1);
 		}
 	});
