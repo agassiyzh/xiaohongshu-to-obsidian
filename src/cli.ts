@@ -661,6 +661,7 @@ program
 	.option("--backup", "Create backup before modifying")
 	.option("--force", "Force re-upload even if already in S3")
 	.option("--continue-on-error", "Continue on error")
+	.option("--local", "Only process local media files (../media/...)")
 	.action(async (directory, options) => {
 		try {
 			const importer = new XHSStandaloneImporter();
@@ -685,18 +686,21 @@ program
 			const isPreview = options.preview || (!options.dryRun && !options.execute);
 			const isDryRun = options.dryRun;
 			const isExecute = options.execute;
+			const localOnly = options.local || false;
 
 			if (isPreview) {
-				console.log(chalk.blue(`[预览模式] 扫描目录: ${directory}`));
+				const modeText = localOnly ? "[本地模式] 预览本地媒体链接" : "[预览模式] 扫描目录";
+				console.log(chalk.blue(`${modeText}: ${directory}`));
 				
-				const previewResult = await replacer.preview(directory, options.filter);
+				const previewResult = await replacer.preview(directory, options.filter, localOnly);
 
 				if (previewResult.totalFiles === 0) {
 					console.log(chalk.green("✅ 没有找到需要替换的链接"));
 					return;
 				}
 
-				console.log(chalk.yellow(`\n找到 ${previewResult.totalUrls} 个非S3链接:\n`));
+				const urlType = localOnly ? "本地链接" : "非S3链接";
+				console.log(chalk.yellow(`\n找到 ${previewResult.totalUrls} 个${urlType}:\n`));
 
 				for (const file of previewResult.files) {
 					console.log(chalk.blue(`📄 ${path.basename(file.filePath)} (${file.category})`));
@@ -719,6 +723,7 @@ program
 					force: options.force,
 					continueOnError: options.continueOnError,
 					filter: options.filter,
+					localOnly,
 				});
 
 				console.log(chalk.green(`\n✅ 模拟完成`));
@@ -739,13 +744,15 @@ program
 					return;
 				}
 
-				console.log(chalk.blue(`[执行替换] 目录: ${directory}`));
+				const modeText = localOnly ? "[本地模式] 执行替换" : "[执行替换] 目录";
+				console.log(chalk.blue(`${modeText}: ${directory}`));
 				
 				const result = await replacer.execute(directory, {
 					backup: options.backup,
 					force: options.force,
 					continueOnError: options.continueOnError,
 					filter: options.filter,
+					localOnly,
 				});
 
 				console.log(chalk.green(`\n✅ 替换完成`));

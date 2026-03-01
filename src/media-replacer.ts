@@ -27,6 +27,7 @@ interface ReplaceOptions {
 	force?: boolean;
 	continueOnError?: boolean;
 	filter?: string;
+	localOnly?: boolean;
 }
 
 export class MediaReplacer {
@@ -40,7 +41,7 @@ export class MediaReplacer {
 		this.uploader = new S3Uploader(s3Config);
 	}
 
-	async preview(directory: string, filter?: string): Promise<PreviewResult> {
+	async preview(directory: string, filter?: string, localOnly?: boolean): Promise<PreviewResult> {
 		const files = await this.scanMarkdownFiles(directory);
 		const result: PreviewResult = {
 			totalFiles: 0,
@@ -50,7 +51,9 @@ export class MediaReplacer {
 
 		for (const filePath of files) {
 			const category = this.extractCategoryFromPath(filePath, directory);
-			const urls = await this.extractNonS3Urls(filePath, filter);
+			const urls = localOnly 
+				? await this.extractLocalUrls(filePath, filter)
+				: await this.extractNonS3Urls(filePath, filter);
 			
 			if (urls.length > 0) {
 				result.totalFiles++;
@@ -149,10 +152,33 @@ export class MediaReplacer {
 				}
 
 				try {
-					const uploadResult = await this.uploadToS3WithRetry(
-						mediaInfo.originalUrl,
-						options.force,
-					);
+					let uploadResult: { success: boolean; url?: string; error?: string };
+					
+					const isLocalUrl = mediaInfo.originalUrl.startsWith("../");
+					
+					if (isLocalUrl && !options.localOnly) {
+						const localFilePath = path.join(path.dirname(filePath), mediaInfo.originalUrl);
+						const filename = path.basename(mediaInfo.originalUrl);
+						
+						try {
+							await fs.access(localFilePath);
+							uploadResult = await this.uploadLocalFile(localFilePath, filename);
+						} catch {
+							uploadResult = await this.uploadToS3WithRetry(
+								mediaInfo.originalUrl,
+								options.force,
+							);
+						}
+					} else if (isLocalUrl && options.localOnly) {
+						const localFilePath = path.join(path.dirname(filePath), mediaInfo.originalUrl);
+						const filename = path.basename(mediaInfo.originalUrl);
+						uploadResult = await this.uploadLocalFile(localFilePath, filename);
+					} else {
+						uploadResult = await this.uploadToS3WithRetry(
+							mediaInfo.originalUrl,
+							options.force,
+						);
+					}
 
 					if (uploadResult.success && uploadResult.url) {
 						content = content.replace(mediaInfo.originalUrl, uploadResult.url);
@@ -337,5 +363,56 @@ export class MediaReplacer {
 		}
 		
 		return "Unknown";
+	}
+
+	async extractLocalUrls(filePath: string, filter?: string): Promise<MediaInfo[]> {
+		try {
+			const content = await fs.readFile(filePath, "utf-8");
+			const urls = this.extractMediaUrls(content);
+
+			return urls.filter((url) => {
+				if (!url.url.startsWith("../")) {
+					return false;
+				}
+				if (filter) {
+					return this.matchFilter(filter, url);
+				}
+				return true;
+			});
+		} catch {
+			return [];
+		}
+	}
+
+	private async uploadLocalFile(
+		localPath: string,
+		filename: string,
+	): Promise<{ success: boolean; url?: string; error?: string }> {
+		try {
+			const buffer = await fs.readFile(localPath);
+			const ext = path.extname(filename).toLowerCase();
+			const contentType = this.getContentType(ext);
+
+			const result = await this.uploader.uploadBuffer(buffer, filename, contentType);
+			return result;
+		} catch (error) {
+			return {
+				success: false,
+				error: (error as Error).message,
+			};
+		}
+	}
+
+	private getContentType(ext: string): string {
+		const contentTypes: Record<string, string> = {
+			".jpg": "image/jpeg",
+			".jpeg": "image/jpeg",
+			".png": "image/png",
+			".gif": "image/gif",
+			".webp": "image/webp",
+			".mp4": "video/mp4",
+			".webm": "video/webm",
+		};
+		return contentTypes[ext] || "application/octet-stream";
 	}
 }
