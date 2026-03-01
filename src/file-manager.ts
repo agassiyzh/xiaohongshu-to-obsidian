@@ -154,8 +154,7 @@ export class FileManager {
 	}
 
 	private sanitizeTitle(title: string): string {
-		// Remove invalid characters for filenames
-		let sanitized = title.replace(/[<>:"/\\|?*]/g, "-");
+		let sanitized = title.replace(/[<>:"/\\|?*()""'']/g, "-");
 		sanitized = sanitized.replace(/\s+/g, "-");
 		sanitized = sanitized.replace(/-+/g, "-");
 		sanitized = sanitized.replace(/^-+|-+$/g, "");
