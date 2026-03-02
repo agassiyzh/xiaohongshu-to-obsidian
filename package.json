@@ -10,7 +10,9 @@
 		"dev": "tsx watch src/index.ts",
 		"build": "tsc",
 		"start": "node dist/cli.js",
-		"test": "node dist/cli.js --help",
+		"test": "jest",
+	"test:watch": "jest --watch",
+	"test:coverage": "jest --coverage",
 		"demo": "node dist/cli.js interactive"
 	},
 	"keywords": [
@@ -34,7 +36,10 @@
 	},
 	"devDependencies": {
 		"@types/inquirer": "^9.0.0",
+		"@types/jest": "^30.0.0",
 		"@types/node": "^20.0.0",
+		"jest": "^30.2.0",
+		"ts-jest": "^29.4.6",
 		"tsx": "^4.0.0",
 		"typescript": "^5.0.0"
 	},

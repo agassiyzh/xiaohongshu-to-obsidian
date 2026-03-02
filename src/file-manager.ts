@@ -66,7 +66,7 @@ export class FileManager {
 			if (downloadMedia) {
 				if (note.isVideo) {
 					for (let i = 0; i < note.videos.length; i++) {
-						const filename = `${this.sanitizeTitle(note.title)}-video-${i}.mp4`;
+						const filename = `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-video-${i}.mp4`;
 						const result = await this.downloadMediaFile(
 							note.videos[i],
 							mediaFolder,
@@ -82,7 +82,7 @@ export class FileManager {
 						}
 					}
 					for (let i = 0; i < note.images.length; i++) {
-						const filename = `${this.sanitizeTitle(note.title)}-${i}.jpg`;
+						const filename = `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-${i}.jpg`;
 						const result = await this.downloadMediaFile(
 							note.images[i],
 							mediaFolder,
@@ -99,7 +99,7 @@ export class FileManager {
 					}
 				} else {
 					for (let i = 0; i < note.images.length; i++) {
-						const filename = `${this.sanitizeTitle(note.title)}-${i}.jpg`;
+						const filename = `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-${i}.jpg`;
 						const result = await this.downloadMediaFile(
 							note.images[i],
 							mediaFolder,
@@ -154,11 +154,15 @@ export class FileManager {
 	}
 
 	private sanitizeTitle(title: string): string {
-		let sanitized = title.replace(/[<>:"/\\|?*()""'']/g, "-");
+		let sanitized = title.replace(/[<>:"/\\|?*()""''（）]/g, "-");
 		sanitized = sanitized.replace(/\s+/g, "-");
 		sanitized = sanitized.replace(/-+/g, "-");
 		sanitized = sanitized.replace(/^-+|-+$/g, "");
 		return sanitized.length > 0 ? sanitized.substring(0, 50) : "Untitled";
+	}
+
+	private getShortId(id: string): string {
+		return id ? id.substring(0, 6) : "unknown";
 	}
 
 	private generateMarkdown(
@@ -174,8 +178,8 @@ export class FileManager {
 
 		const getImageUrl = (index: number, isVideo: boolean = false): string => {
 			const filename = isVideo
-				? `${this.sanitizeTitle(note.title)}-video-${index}.mp4`
-				: `${this.sanitizeTitle(note.title)}-${index}.jpg`;
+				? `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-video-${index}.mp4`
+				: `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-${index}.jpg`;
 			
 			if (useS3Urls && s3UrlMap[filename]) {
 				return s3UrlMap[filename];
@@ -241,7 +245,7 @@ type: ${note.isVideo ? "video" : "image"}`;
 		}
 
 		if (note.isVideo && note.videos.length > 0) {
-			const videoFilename = `${this.sanitizeTitle(note.title)}-video-0.mp4`;
+			const videoFilename = `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-video-0.mp4`;
 			let videoUrl = note.videos[0];
 			if (downloadMedia) {
 				if (useS3Urls && s3UrlMap[videoFilename]) {
