@@ -149,9 +149,12 @@ describe('FileManager', () => {
 		it('should use S3 URLs when useS3Urls is true', () => {
 			const note = createMockNote();
 			const s3UrlMap = {
-				'Test-Title-abc123-0.jpg': 'https://s3.example.com/image.jpg',
+				'abcd1234efgh5678.jpg': 'https://s3.example.com/image.jpg',
 			};
-			const result = (fileManager as any).generateMarkdown(note, true, '/tmp/media', true, s3UrlMap);
+			const hashMap = {
+				'image_0': 'abcd1234efgh5678.jpg',
+			};
+			const result = (fileManager as any).generateMarkdown(note, true, '/tmp/media', true, s3UrlMap, hashMap);
 
 			expect(result).toContain('https://s3.example.com/image.jpg');
 		});
@@ -211,10 +214,13 @@ describe('FileManager', () => {
 				id: 'xyz789',
 			});
 			const s3UrlMap = {
-				'Test-Title-xyz789-0.jpg': 'https://s3.example.com/test (title).jpg',
+				'abcd1234efgh5678.jpg': 'https://s3.example.com/test-hash.jpg',
 			};
-			const result = (fileManager as any).generateMarkdown(note, true, '/tmp/media', true, s3UrlMap);
-			expect(result).toContain('https://s3.example.com/test (title).jpg');
+			const hashMap = {
+				'image_0': 'abcd1234efgh5678.jpg',
+			};
+			const result = (fileManager as any).generateMarkdown(note, true, '/tmp/media', true, s3UrlMap, hashMap);
+			expect(result).toContain('https://s3.example.com/test-hash.jpg');
 		});
 
 		it('should handle cover image with special character title', () => {
@@ -277,6 +283,30 @@ describe('FileManager', () => {
 	describe('getFullBasePath', () => {
 		it('should return full path with base folder', () => {
 			expect(fileManager.getFullBasePath()).toBe('/tmp/test/XHS Notes');
+		});
+	});
+
+	describe('generateHashedFilename', () => {
+		it('should generate consistent hash for same content', () => {
+			const buffer1 = Buffer.from('test content');
+			const buffer2 = Buffer.from('test content');
+			const result1 = (fileManager as any).generateHashedFilename(buffer1, '.jpg');
+			const result2 = (fileManager as any).generateHashedFilename(buffer2, '.jpg');
+			expect(result1).toBe(result2);
+		});
+
+		it('should generate different hash for different content', () => {
+			const buffer1 = Buffer.from('content 1');
+			const buffer2 = Buffer.from('content 2');
+			const result1 = (fileManager as any).generateHashedFilename(buffer1, '.jpg');
+			const result2 = (fileManager as any).generateHashedFilename(buffer2, '.jpg');
+			expect(result1).not.toBe(result2);
+		});
+
+		it('should use correct extension', () => {
+			const buffer = Buffer.from('test');
+			const result = (fileManager as any).generateHashedFilename(buffer, '.mp4');
+			expect(result).toMatch(/\.mp4$/);
 		});
 	});
 });

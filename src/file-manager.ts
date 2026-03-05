@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 import { XHSNote, ImportResult, S3Config } from "./types";
 import { S3Uploader } from "./s3-uploader";
 
@@ -62,6 +63,7 @@ export class FileManager {
 			const mediaFiles: string[] = [];
 			const mediaUrls: string[] = [];
 			const s3UrlMap: Record<string, string> = {};
+			const hashMap: Record<string, string> = {};
 
 			if (downloadMedia) {
 				if (note.isVideo) {
@@ -77,7 +79,10 @@ export class FileManager {
 							if (result.localPath) mediaFiles.push(result.localPath);
 							if (result.s3Url) {
 								mediaUrls.push(result.s3Url);
-								s3UrlMap[filename] = result.s3Url;
+								if (result.hash) {
+									s3UrlMap[result.hash] = result.s3Url;
+									hashMap[`video_${i}`] = result.hash;
+								}
 							}
 						}
 					}
@@ -93,7 +98,10 @@ export class FileManager {
 							if (result.localPath) mediaFiles.push(result.localPath);
 							if (result.s3Url) {
 								mediaUrls.push(result.s3Url);
-								s3UrlMap[filename] = result.s3Url;
+								if (result.hash) {
+									s3UrlMap[result.hash] = result.s3Url;
+									hashMap[`image_${i}`] = result.hash;
+								}
 							}
 						}
 					}
@@ -110,7 +118,10 @@ export class FileManager {
 							if (result.localPath) mediaFiles.push(result.localPath);
 							if (result.s3Url) {
 								mediaUrls.push(result.s3Url);
-								s3UrlMap[filename] = result.s3Url;
+								if (result.hash) {
+									s3UrlMap[result.hash] = result.s3Url;
+									hashMap[`image_${i}`] = result.hash;
+								}
 							}
 						}
 					}
@@ -123,6 +134,7 @@ export class FileManager {
 				mediaFolder,
 				useS3Urls,
 				s3UrlMap,
+				hashMap,
 			);
 
 			await fs.writeFile(filePath, markdown, "utf-8");
@@ -165,24 +177,32 @@ export class FileManager {
 		return id ? id.substring(0, 6) : "unknown";
 	}
 
+	generateHashedFilename(buffer: Buffer, ext: string): string {
+		const hash = crypto.createHash("md5").update(buffer).digest("hex");
+		return `${hash}${ext}`;
+	}
+
 	private generateMarkdown(
 		note: XHSNote,
 		downloadMedia: boolean,
 		mediaFolder: string,
 		useS3Urls: boolean = false,
 		s3UrlMap: Record<string, string> = {},
+		hashMap: Record<string, string> = {},
 	): string {
 		const now = new Date();
 		const dateStr = now.toISOString().split("T")[0];
 		const importedAt = now.toLocaleString();
 
 		const getImageUrl = (index: number, isVideo: boolean = false): string => {
-			const filename = isVideo
+			const hashKey = isVideo ? `video_${index}` : `image_${index}`;
+			const hashFilename = hashMap[hashKey];
+			const filename = hashFilename || (isVideo
 				? `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-video-${index}.mp4`
-				: `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-${index}.jpg`;
+				: `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-${index}.jpg`);
 			
-			if (useS3Urls && s3UrlMap[filename]) {
-				return s3UrlMap[filename];
+			if (useS3Urls && hashFilename && s3UrlMap[hashFilename]) {
+				return s3UrlMap[hashFilename];
 			}
 			return downloadMedia ? `../media/${filename}` : note.images[index];
 		};
@@ -245,13 +265,14 @@ type: ${note.isVideo ? "video" : "image"}`;
 		}
 
 		if (note.isVideo && note.videos.length > 0) {
-			const videoFilename = `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-video-0.mp4`;
+			const videoHashKey = 'video_0';
+			const videoHash = hashMap[videoHashKey] || `${this.sanitizeTitle(note.title)}-${this.getShortId(note.id)}-video-0.mp4`;
 			let videoUrl = note.videos[0];
 			if (downloadMedia) {
-				if (useS3Urls && s3UrlMap[videoFilename]) {
-					videoUrl = s3UrlMap[videoFilename];
+				if (useS3Urls && hashMap[videoHashKey] && s3UrlMap[hashMap[videoHashKey]]) {
+					videoUrl = s3UrlMap[hashMap[videoHashKey]];
 				} else {
-					videoUrl = `../media/${videoFilename}`;
+					videoUrl = `../media/${videoHash}`;
 				}
 			}
 			markdown += `<video controls src="${videoUrl}" width="100%"></video>\n\n`;
@@ -265,7 +286,7 @@ type: ${note.isVideo ? "video" : "image"}`;
 		folder: string,
 		filename: string,
 		uploadToS3: boolean = false,
-	): Promise<{ success: boolean; localPath?: string; s3Url?: string; error?: string }> {
+	): Promise<{ success: boolean; localPath?: string; s3Url?: string; hash?: string; error?: string }> {
 		try {
 			const fetch = (await import("node-fetch")).default;
 			const response = await fetch(url);
@@ -275,14 +296,15 @@ type: ${note.isVideo ? "video" : "image"}`;
 			}
 
 			const buffer = await response.buffer();
-			const localPath = path.join(folder, filename);
+			const ext = filename.split(".").pop() || "jpg";
+			const hash = this.generateHashedFilename(buffer, `.${ext}`);
+			const localPath = path.join(folder, hash);
 			await fs.writeFile(localPath, buffer);
 
 			let s3Url: string | undefined;
 			if (uploadToS3 && this.s3Uploader) {
-				const ext = filename.split(".").pop() || "jpg";
 				const contentType = ext === "mp4" ? "video/mp4" : `image/${ext === "jpg" ? "jpeg" : ext}`;
-				const result = await this.s3Uploader.uploadBuffer(buffer, filename, contentType);
+				const result = await this.s3Uploader.uploadBuffer(buffer, hash, contentType);
 				if (result.success && result.url) {
 					s3Url = result.url;
 				}
@@ -292,6 +314,7 @@ type: ${note.isVideo ? "video" : "image"}`;
 				success: true,
 				localPath: localPath,
 				s3Url,
+				hash,
 			};
 		} catch (error) {
 			console.error(`Failed to download media from ${url}:`, error);
