@@ -154,7 +154,7 @@ export class FileManager {
 	}
 
 	private sanitizeTitle(title: string): string {
-		let sanitized = title.replace(/[<>:"/\\|?*()""''（）]/g, "-");
+		let sanitized = title.replace(/[<>:"/\\|?*()""''（）#]/g, "-");
 		sanitized = sanitized.replace(/\s+/g, "-");
 		sanitized = sanitized.replace(/-+/g, "-");
 		sanitized = sanitized.replace(/^-+|-+$/g, "");

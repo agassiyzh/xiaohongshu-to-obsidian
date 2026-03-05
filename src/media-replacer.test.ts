@@ -192,7 +192,7 @@ cover: https://example.com/cover.jpg
 			expect(result.some((u: any) => u.url === 'https://example.com/cover.jpg')).toBe(true);
 		});
 
-		it('should skip relative paths in cover', () => {
+		it('should extract relative paths in cover for S3 upload', () => {
 			const content = `---
 title: Test
 cover: ../media/cover.jpg
@@ -201,7 +201,7 @@ cover: ../media/cover.jpg
 # Content
 `;
 			const result = (replacer as any).extractMediaUrls(content);
-			expect(result.some((u: any) => u.url === '../media/cover.jpg')).toBe(false);
+			expect(result.some((u: any) => u.url === '../media/cover.jpg')).toBe(true);
 		});
 
 		it('should skip S3 URLs in cover', () => {

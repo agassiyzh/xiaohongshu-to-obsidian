@@ -7,6 +7,7 @@ import ora from "ora";
 import { XHSStandaloneImporter } from "./index";
 import { BatchImporter } from "./batch-importer";
 import { MediaReplacer } from "./media-replacer";
+import { S3Uploader } from "./s3-uploader";
 import { Config, S3Config } from "./types";
 import path from "path";
 import fs from "fs/promises";
@@ -899,6 +900,115 @@ program
 				}
 
 				console.log(chalk.green(`\n✅ 已删除 ${deleted} 个孤立媒体文件`));
+			}
+		} catch (error) {
+			console.error(chalk.red("❌ 错误:"), (error as Error).message);
+			process.exit(1);
+		}
+	});
+
+program
+	.command("cleanup-s3")
+	.description("Clean up orphaned S3 media files")
+	.argument("<directory>", "Directory containing markdown files")
+	.option("-p, --preview", "Preview files to be deleted")
+	.option("--execute", "Execute the cleanup")
+	.option("--dry-run", "Simulate cleanup without making changes")
+	.action(async (directory, options) => {
+		try {
+			const importer = new XHSStandaloneImporter();
+			await importer.initialize();
+			const config = await importer.getConfig();
+
+			if (!config.s3.enabled) {
+				console.error(chalk.red("❌ S3 未启用，请在配置中启用 S3"));
+				process.exit(1);
+			}
+
+			const fullPath = path.resolve(directory);
+			const s3Uploader = new S3Uploader(config.s3);
+
+			const isPreview = options.preview || (!options.execute);
+			const isExecute = options.execute;
+
+			const markdownFiles = await findMarkdownFiles(fullPath);
+			const referencedS3Urls = new Set<string>();
+			
+			for (const mdFile of markdownFiles) {
+				const content = await fs.readFile(mdFile, "utf-8");
+				const urls = extractMediaUrlsFromContent(content);
+				
+				for (const url of urls) {
+					if (url.startsWith("http") || url.startsWith("s3://")) {
+						try {
+							const urlObj = new URL(url.startsWith("s3://") ? url.replace("s3://", "https://") : url);
+							const key = urlObj.pathname.replace(/^\//, "");
+							referencedS3Urls.add(key);
+						} catch {}
+					}
+				}
+			}
+
+			const s3Spinner = ora("正在获取 S3 文件列表...").start();
+			const s3Keys = await s3Uploader.listObjects(config.s3.pathPrefix);
+			s3Spinner.succeed();
+
+			const referencedWithPrefix = new Set(
+				Array.from(referencedS3Urls).map(k => 
+					k.startsWith(config.s3.pathPrefix) ? k : `${config.s3.pathPrefix}${k}`
+				)
+			);
+
+			const orphanedKeys = s3Keys.filter(k => !referencedWithPrefix.has(k));
+
+			if (isPreview || !isExecute) {
+				console.log(chalk.blue(`[预览模式] 目录: ${fullPath}`));
+				console.log();
+				console.log(`📊 S3 统计信息:`);
+				console.log(`   Markdown 文件: ${markdownFiles.length}`);
+				console.log(`   S3 对象总数: ${s3Keys.length}`);
+				console.log(`   引用的对象: ${referencedWithPrefix.size}`);
+				console.log(`   孤立对象: ${orphanedKeys.length}`);
+				console.log();
+
+				if (orphanedKeys.length > 0) {
+					console.log(chalk.yellow(`🗑️ 孤立文件 (将被删除):`));
+					for (const key of orphanedKeys.slice(0, 20)) {
+						console.log(`   - ${key}`);
+					}
+					if (orphanedKeys.length > 20) {
+						console.log(`   ... 还有 ${orphanedKeys.length - 20} 个文件`);
+					}
+					console.log();
+					console.log(chalk.cyan("使用 --execute 执行删除"));
+				} else {
+					console.log(chalk.green("✅ 没有孤立的 S3 对象"));
+				}
+			} else if (isExecute) {
+				const { confirm } = await inquirer.prompt([
+					{
+						type: "confirm",
+						name: "confirm",
+						message: `确认删除 ${orphanedKeys.length} 个孤立 S3 对象？`,
+						default: false,
+					},
+				]);
+
+				if (!confirm) {
+					console.log(chalk.yellow("已取消"));
+					return;
+				}
+
+				let deleted = 0;
+				const deleteSpinner = ora("正在删除孤立对象...").start();
+				
+				for (const key of orphanedKeys) {
+					const success = await s3Uploader.delete(key);
+					if (success) deleted++;
+				}
+				
+				deleteSpinner.succeed();
+				console.log(chalk.green(`\n✅ 已删除 ${deleted} 个孤立 S3 对象`));
 			}
 		} catch (error) {
 			console.error(chalk.red("❌ 错误:"), (error as Error).message);

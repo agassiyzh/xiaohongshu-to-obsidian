@@ -16,7 +16,7 @@ describe('FileManager', () => {
 
 		it('should handle mixed content with hashtag', () => {
 			const result = (fileManager as any).sanitizeTitle('北京美食攻略#test');
-			expect(result).toBe('北京美食攻略#test');
+			expect(result).toBe('北京美食攻略-test');
 		});
 
 		it('should replace spaces with hyphens', () => {
@@ -47,7 +47,7 @@ describe('FileManager', () => {
 
 		it('should handle mixed content with hashtag', () => {
 			const result = (fileManager as any).sanitizeTitle('北京美食攻略#test');
-			expect(result).toBe('北京美食攻略#test');
+			expect(result).toBe('北京美食攻略-test');
 		});
 
 		it('should remove multiple consecutive hyphens', () => {

@@ -3,6 +3,7 @@ import {
 	PutObjectCommand,
 	HeadObjectCommand,
 	DeleteObjectCommand,
+	ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { S3Config } from "./types";
@@ -155,6 +156,38 @@ export class S3Uploader {
 			return true;
 		} catch {
 			return false;
+		}
+	}
+
+	async listObjects(prefix?: string): Promise<string[]> {
+		const keys: string[] = [];
+		const effectivePrefix = prefix || this.pathPrefix;
+
+		try {
+			let continuationToken: string | undefined;
+			do {
+				const response = await this.client.send(
+					new ListObjectsV2Command({
+						Bucket: this.bucket,
+						Prefix: effectivePrefix,
+						ContinuationToken: continuationToken,
+					}),
+				);
+
+				if (response.Contents) {
+					for (const obj of response.Contents) {
+						if (obj.Key) {
+							keys.push(obj.Key);
+						}
+					}
+				}
+
+				continuationToken = response.NextContinuationToken;
+			} while (continuationToken);
+
+			return keys;
+		} catch {
+			return [];
 		}
 	}
 

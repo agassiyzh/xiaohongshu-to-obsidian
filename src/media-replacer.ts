@@ -291,7 +291,7 @@ export class MediaReplacer {
 		const coverMatch = coverRegex.exec(content);
 		if (coverMatch) {
 			const coverUrl = coverMatch[1].trim();
-			if (!coverUrl.startsWith("../") && !this.isS3Url(coverUrl)) {
+			if (!this.isS3Url(coverUrl)) {
 				urls.push({
 					type: "image",
 					url: coverUrl,
