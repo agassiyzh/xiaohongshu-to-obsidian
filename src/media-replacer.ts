@@ -268,9 +268,11 @@ export class MediaReplacer {
 	extractMediaUrls(content: string): MediaInfo[] {
 		const urls: MediaInfo[] = [];
 
+		const contentWithoutComments = content.replace(/<!--[\s\S]*?-->/g, "");
+
 		const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
 		let match;
-		while ((match = imageRegex.exec(content)) !== null) {
+		while ((match = imageRegex.exec(contentWithoutComments)) !== null) {
 			urls.push({
 				type: "image",
 				url: match[2],
@@ -279,7 +281,7 @@ export class MediaReplacer {
 		}
 
 		const videoRegex = /<video[^>]+src=["']([^"']+)["'][^>]*>/gi;
-		while ((match = videoRegex.exec(content)) !== null) {
+		while ((match = videoRegex.exec(contentWithoutComments)) !== null) {
 			urls.push({
 				type: "video",
 				url: match[1],
@@ -288,7 +290,7 @@ export class MediaReplacer {
 		}
 
 		const coverRegex = /^cover:\s*(.+)$/m;
-		const coverMatch = coverRegex.exec(content);
+		const coverMatch = coverRegex.exec(contentWithoutComments);
 		if (coverMatch) {
 			const coverUrl = coverMatch[1].trim();
 			if (!this.isS3Url(coverUrl)) {
